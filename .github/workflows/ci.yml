@@ -23,6 +23,9 @@ jobs:
           php-version: ${{ matrix.php-version }}
           coverage: none
 
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Validate PHP syntax
         run: find src bin tests -type f -name "*.php" -exec php -l {} \;
 
