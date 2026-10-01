@@ -1,0 +1,201 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Autoloader fallback
+spl_autoload_register(function ($class) {
+    $prefix = 'EidCloud\\VideoPipeline\\';
+    $baseDir = __DIR__ . '/../src/';
+
+    $len = strlen($prefix);
+    if (strncmp($prefix, $class, $len) !== 0) {
+        return;
+    }
+
+    $relativeClass = substr($class, $len);
+    $file = $baseDir . str_replace('\\', '/', $relativeClass) . '.php';
+
+    if (file_exists($file)) {
+        require_once $file;
+    }
+});
+
+use EidCloud\VideoPipeline\VideoPipeline;
+use EidCloud\VideoPipeline\FFmpegRunner;
+use EidCloud\VideoPipeline\Stages\AudioExtractor;
+use EidCloud\VideoPipeline\Stages\AudioMixer;
+use EidCloud\VideoPipeline\Stages\SubtitleMuxer;
+
+function printUsage(): void
+{
+    echo <<<USAGE
+\033[1;36m=========================================================================\033[0m
+\033[1;35m 🎥 EidCloud Video Pipeline - CLI Video Dubbing & Translation Tool \033[0m
+\033[1;36m=========================================================================\033[0m
+
+\033[1;33mUSAGE:\033[0m
+  php bin/eidcloud-video <command> [arguments] [options]
+
+\033[1;33mCOMMANDS:\033[0m
+  \033[1;32mtranslate\033[0m <video.mp4>        Run full pipeline: extract, ASR, translate, TTS, mix & subtitle
+  \033[1;32mextract-audio\033[0m <video.mp4>    Extract high-fidelity audio stream from video container
+  \033[1;32mmix\033[0m <video.mp4> <audio.wav>  Mix dubbed audio into video with automatic audio ducking
+  \033[1;32mhelp\033[0m / \033[1;32m-h\033[0m / \033[1;32m--help\033[0m             Display this help message
+
+\033[1;33mOPTIONS FOR 'translate':\033[0m
+  \033[1;34m--from=<lang>\033[0m                Source dialogue language code (default: en)
+  \033[1;34m--to=<lang>\033[0m                  Target dialogue language code (default: ar)
+  \033[1;34m--voice=<male|female>\033[0m        Voice profile for synthetic dubbing (default: male)
+  \033[1;34m--ducking=<level>\033[0m            Audio ducking volume reduction (default: -12dB)
+  \033[1;34m--out=<filename>\033[0m             Output path for translated video (default: output_translated.mp4)
+  \033[1;34m--burn-subtitles\033[0m             Burn subtitles directly onto video frames
+
+\033[1;33mOPTIONS FOR 'extract-audio':\033[0m
+  \033[1;34m--out=<filename>\033[0m             Output path for extracted audio WAV (default: extracted_audio.wav)
+  \033[1;34m--rate=<samples>\033[0m             Sample rate in Hz (default: 16000)
+
+\033[1;33mOPTIONS FOR 'mix':\033[0m
+  \033[1;34m--ducking=<level>\033[0m            Sidechain compression ducking level (default: -12dB)
+  \033[1;34m--out=<filename>\033[0m             Output path for mixed video (default: mixed_output.mp4)
+
+\033[1;33mEXAMPLES:\033[0m
+  \033[0;32mphp bin/eidcloud-video translate input.mp4 --from=en --to=ar --voice=male\033[0m
+  \033[0;32mphp bin/eidcloud-video extract-audio input.mp4 --out=audio.wav\033[0m
+  \033[0;32mphp bin/eidcloud-video mix video.mp4 dubbed.wav --ducking=-12dB --out=final.mp4\033[0m
+
+USAGE;
+}
+
+$argv = $_SERVER['argv'];
+array_shift($argv); // Remove script name
+
+if (empty($argv) || in_array('--help', $argv, true) || in_array('-h', $argv, true) || $argv[0] === 'help') {
+    printUsage();
+    exit(0);
+}
+
+$command = array_shift($argv);
+
+// Parse remaining positional arguments and options
+$positional = [];
+$options = [];
+
+foreach ($argv as $arg) {
+    if (str_starts_with($arg, '--')) {
+        $clean = substr($arg, 2);
+        if (str_contains($clean, '=')) {
+            [$k, $v] = explode('=', $clean, 2);
+            $options[$k] = $v;
+        } else {
+            $options[$clean] = true;
+        }
+    } else {
+        $positional[] = $arg;
+    }
+}
+
+$ffmpeg = new FFmpegRunner();
+
+try {
+    switch ($command) {
+        case 'translate':
+            if (empty($positional[0])) {
+                echo "\033[1;31mError: Missing input video path.\033[0m\n";
+                echo "Usage: php bin/eidcloud-video translate <video.mp4> [--from=en] [--to=ar] [--voice=male]\n";
+                exit(1);
+            }
+
+            $inputVideo = $positional[0];
+            $from = $options['from'] ?? 'en';
+            $to = $options['to'] ?? 'ar';
+            $voice = $options['voice'] ?? 'male';
+            $ducking = $options['ducking'] ?? '-12dB';
+            $outFile = $options['out'] ?? 'output_translated.mp4';
+            $burnSubs = isset($options['burn-subtitles']);
+
+            echo "\033[1;32m[INFO]\033[0m Starting full video translation & dubbing pipeline...\n";
+            echo "       Source: {$inputVideo}\n";
+            echo "       Translation: {$from} -> {$to} (Voice: {$voice})\n";
+            echo "       Ducking: {$ducking}\n";
+            echo "       Output: {$outFile}\n\n";
+
+            $pipeline = VideoPipeline::createDefault($ffmpeg);
+            $pipeline->hook('before:audio_extractor', function () {
+                echo "  [1/7] \033[1;34m[Demux]\033[0m Extracting high-fidelity audio stream...\n";
+            });
+            $pipeline->hook('before:speech_to_text', function () {
+                echo "  [2/7] \033[1;34m[ASR]\033[0m Performing automatic speech recognition & timestamping...\n";
+            });
+            $pipeline->hook('before:speaker_diarization', function () {
+                echo "  [3/7] \033[1;34m[Diarization]\033[0m Separating speaker turns and acoustic boundaries...\n";
+            });
+            $pipeline->hook('before:dialogue_translator', function () {
+                echo "  [4/7] \033[1;34m[Translation]\033[0m Translating dialogue to target language...\n";
+            });
+            $pipeline->hook('before:tts_synthesizer', function () {
+                echo "  [5/7] \033[1;34m[TTS Synthesis]\033[0m Generating synchronized voice dubbing...\n";
+            });
+            $pipeline->hook('before:audio_mixer', function () {
+                echo "  [6/7] \033[1;34m[Ducking & Mix]\033[0m Lowering background sound and mixing audio...\n";
+            });
+            $pipeline->hook('before:subtitle_muxer', function () {
+                echo "  [7/7] \033[1;34m[Muxing]\033[0m Embedding synchronized SRT/VTT subtitles into container...\n";
+            });
+
+            $ctx = $pipeline->run($inputVideo, $from, $to, $voice, [
+                'ducking' => $ducking,
+                'output_video' => $outFile,
+                'burn_subtitles' => $burnSubs,
+            ]);
+
+            echo "\n\033[1;32m[SUCCESS]\033[0m Video translated & dubbed successfully!\n";
+            echo "  * Final Video:  " . $ctx->get('final_video') . "\n";
+            echo "  * Subtitles:    " . $ctx->get('subtitles_srt') . "\n";
+            echo "  * Dubbed Audio: " . $ctx->get('dubbed_audio') . "\n";
+            break;
+
+        case 'extract-audio':
+            if (empty($positional[0])) {
+                echo "\033[1;31mError: Missing input video path.\033[0m\n";
+                echo "Usage: php bin/eidcloud-video extract-audio <video.mp4> [--out=audio.wav]\n";
+                exit(1);
+            }
+
+            $inputVideo = $positional[0];
+            $outFile = $options['out'] ?? 'audio.wav';
+            $sampleRate = isset($options['rate']) ? (int)$options['rate'] : 16000;
+
+            echo "\033[1;32m[INFO]\033[0m Extracting audio from {$inputVideo} -> {$outFile} ({$sampleRate} Hz)...\n";
+            $extractor = new AudioExtractor($ffmpeg);
+            $extracted = $extractor->extract($inputVideo, $outFile, $sampleRate);
+            echo "\033[1;32m[SUCCESS]\033[0m Audio extracted to {$extracted}\n";
+            break;
+
+        case 'mix':
+            if (count($positional) < 2) {
+                echo "\033[1;31mError: Missing video or audio input.\033[0m\n";
+                echo "Usage: php bin/eidcloud-video mix <video.mp4> <dubbed.wav> [--ducking=-12dB] [--out=mixed.mp4]\n";
+                exit(1);
+            }
+
+            $videoPath = $positional[0];
+            $audioPath = $positional[1];
+            $ducking = $options['ducking'] ?? '-12dB';
+            $outFile = $options['out'] ?? 'mixed_output.mp4';
+
+            echo "\033[1;32m[INFO]\033[0m Mixing video ({$videoPath}) with dubbed audio ({$audioPath}) [Ducking: {$ducking}]...\n";
+            $mixer = new AudioMixer($ffmpeg);
+            $mixed = $mixer->mixVideoWithDubbedAudio($videoPath, $audioPath, $outFile, $ducking);
+            echo "\033[1;32m[SUCCESS]\033[0m Mixed video created: {$mixed}\n";
+            break;
+
+        default:
+            echo "\033[1;31mError: Unknown command '{$command}'.\033[0m\n\n";
+            printUsage();
+            exit(1);
+    }
+} catch (\Throwable $e) {
+    echo "\n\033[1;31m[ERROR]\033[0m " . $e->getMessage() . "\n";
+    exit(1);
+}

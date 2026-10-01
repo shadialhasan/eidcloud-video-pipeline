@@ -1,0 +1,32 @@
+{
+  "name": "eidcloud/video-pipeline",
+  "description": "Modular video translation, dubbing, and subtitle orchestration pipeline with audio ducking and FFmpeg in pure PHP",
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Eng. MHD. Shadi AL-Hasan",
+      "email": "shadi@eidcloud.com",
+      "role": "Author & Maintainer"
+    }
+  ],
+  "require": {
+    "php": ">=8.2.0",
+    "ext-json": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "EidCloud\\VideoPipeline\\": "src/"
+    }
+  },
+  "bin": [
+    "bin/eidcloud-video"
+  ],
+  "scripts": {
+    "test": "php tests/run_tests.php"
+  },
+  "config": {
+    "sort-packages": true,
+    "optimize-autoloader": true
+  }
+}

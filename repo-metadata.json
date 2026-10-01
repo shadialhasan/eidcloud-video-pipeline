@@ -1,0 +1,12 @@
+{
+  "description": "Modular video translation, dubbing, and subtitle orchestration pipeline with audio ducking and FFmpeg in pure PHP",
+  "topics": [
+    "eidcloud",
+    "video-pipeline",
+    "video-translation",
+    "automated-dubbing",
+    "audio-ducking",
+    "ffmpeg",
+    "php8"
+  ]
+}
